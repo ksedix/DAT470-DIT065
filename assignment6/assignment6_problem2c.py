@@ -31,17 +31,11 @@ def normalize(X: npt.NDArray[np.float64])->npt.NDArray[np.float64]:
     
     Implement this function using array operations! No loops allowed.
     """
-    # Calculate the L2 norm of each row (axis=1)
-    norms = np.linalg.norm(X, axis=1)
+    l2_norms = np.linalg.norm(X,axis=1)
+    #reshaping l2 norms so that it can be broadcasted with X
+    l2_norm_broadcasted = l2_norms[:,np.newaxis]
 
-    # Ensure no division by zero
-    norms[norms == 0] = 1
-
-    # Divide each row by its L2 norm
-    normalized_matrix = X / norms[:,np.newaxis]
-
-    # Return Normalized Matrix
-    return normalized_matrix
+    return X / l2_norm_broadcasted
 
 def construct_queries(queries_fn: str, word_to_idx: Dict[str,int],
                           X: npt.NDArray[np.float64]) -> \
@@ -74,19 +68,16 @@ class RandomHyperplanes:
         self._d = d
         self._seed = seed
 
-    def fit(self, X: npt.NDArray[np.float64])-> npt.NDArray[np.float64]:
+    def fit(self, X: npt.NDArray[np.float64])->None:
         """
         Draws _d random hyperplanes, that is, by drawing _d Gaussian unit 
         vectors of length determined by the second dimension (number of 
         columns) of X
         """
         rng = np.random.default_rng(self._seed)
-        d = X.shape[1]
-        hyperplanes = np.zeros((self._d,d))
-        for i in range(self._d):
-            hyperplane = rng.standard_normal(d)
-            hyperplanes[i] = hyperplane
-        self.R = self.normalize(hyperplanes)
+        
+        res = np.array([np.random.randn(X.shape[1]) for i in range(self._d)])
+        self.R = normalize(res)
 
     def transform(self, X: npt.NDArray[np.float64])->npt.NDArray[np.uint8]:
         """
@@ -96,7 +87,8 @@ class RandomHyperplanes:
         X_prime = X @ self.R.T
         X_double_prime = (X_prime > 0).astype(int)
         end = time.time()
-        print(f'Transformation took {end-start} seconds')
+        #print(f'Transformation took {end-start} seconds')
+        return X_double_prime
 
     def fit_transform(self, X: npt.NDArray[np.float64])->npt.NDArray[np.uint8]:
         """
@@ -116,6 +108,7 @@ if __name__ == '__main__':
     
     (word_to_idx, idx_to_word, X) = load_glove(args.dataset)
 
+
     X = normalize(X)
 
     (Q,queries) = construct_queries(args.queries, word_to_idx, X)
@@ -123,19 +116,9 @@ if __name__ == '__main__':
     start = time.time()
 
     rh = RandomHyperplanes(args.d, 1234)
-    #timing here or only on transform part of X2?
-    #start_transform = time.time()
     X2 = rh.fit_transform(X)
-    #end_transform = time.time()
     Q2 = rh.transform(Q)
 
     end = time.time()
 
     print(end-start)
-
-
-
-
-
-
-
