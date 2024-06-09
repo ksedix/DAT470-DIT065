@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import random
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
@@ -8,6 +9,8 @@ import argparse
 import time
 from operator import itemgetter
 from typing import Dict, Tuple, List, Optional, Set
+from lsh_normalize import normalize
+from lsh_hyperplanes import RandomHyperplanes
 
 def load_glove(filename: str)->Tuple[Dict[str,int],Dict[int,str],
                                         npt.NDArray[np.float64]]:
@@ -26,24 +29,6 @@ def load_glove(filename: str)->Tuple[Dict[str,int],Dict[int,str],
         idx_to_word[i] = word
     return (word_to_idx, idx_to_word, df.to_numpy())
 
-def normalize(X: npt.NDArray[np.float64])->npt.NDArray[np.float64]:
-    """
-    Reads an n*d matrix and normalizes all rows to have unit-length (L2 norm)
-    
-    Implement this function using array operations! No loops allowed.
-    """
-    # Calculate the L2 norm of each row (axis=1)
-    norms = np.linalg.norm(X, axis=1)
-
-    # Ensure no division by zero
-    norms[norms == 0] = 1
-
-    # Divide each row by its L2 norm
-    normalized_matrix = X / norms[:,np.newaxis]
-
-    # Return Normalized Matrix
-    return normalized_matrix
-
 def construct_queries(queries_fn: str, word_to_idx: Dict[str,int],
                           X: npt.NDArray[np.float64]) -> \
                           Tuple[npt.NDArray[np.float64],List[str]]:
@@ -59,52 +44,7 @@ def construct_queries(queries_fn: str, word_to_idx: Dict[str,int],
         Q[i,:] = X[word_to_idx[queries[i]],:]
     return (Q,queries)
 
-class RandomHyperplanes:
-    """
-    This class mimics the interface of sklearn:
-    - the constructor sets the number of hyperplanes
-    - the random hyperplanes are drawn when fit() is called 
-      (input dimension is set)
-    - transform actually transforms the vectors
-    - fit_transform does fit first, followed by transform
-    """
-    def __init__(self, D: int, seed: Optional[int] = None)->None:
-        """
-        Sets the number of hyperplanes (D) and the optional random number seed
-        """
-        self._D = D
-        self._seed = seed
 
-    def fit(self, X: npt.NDArray[np.float64])->None:
-        """
-        Draws _D random hyperplanes, that is, by drawing _D Gaussian unit 
-        vectors of length determined by the second dimension (number of 
-        columns) of X
-        """
-        rng = np.random.default_rng(self._seed)
-        self._d = X.shape[1]
-        hyperplanes = np.zeros((self._D,self._d))
-        for i in range(self._D):
-            hyperplane = rng.standard_normal(self._d)
-            hyperplanes[i] = hyperplane
-        self.R = normalize(hyperplanes)
-
-    def transform(self, X: npt.NDArray[np.float64])->npt.NDArray[np.uint8]:
-        """
-        Project the rows of X into binary vectors
-        """
-        X_prime = X @ self.R.T
-        X_double_prime = (X_prime > 0).astype(int)
-        return X_double_prime
-
-    def fit_transform(self, X: npt.NDArray[np.float64])->npt.NDArray[np.uint8]:
-        """
-        Calls fit() followed by transform()
-        """
-        self.fit(X)
-        return self.transform(X)
-
-#Make changes here
 class LocalitySensitiveHashing:
     """
     Performs locality-sensitive hashing by projecting unit vectors to binary vectors
@@ -132,16 +72,15 @@ class LocalitySensitiveHashing:
         """
         self._D = D
         self._k = k
-        self._L = L
+        self._L = L 
+        self._H = [dict() for _ in range(self._L)]
         rng = np.random.default_rng(seed)
-        self._random_hyperplanes = RandomHyperplanes(D,seed)
         # draw the hash functions here
         # (essentially, draw a random matrix of shape L*k with values in
         # 0,1,...,d-1)
         # also initialize the random hyperplanes
-
-        self._hash_functions = np.random.randint(0, self._D, size=(self._L, self._k))
-        self._H = [dict() for _ in range(self._L)]
+        self._random_hyperplanes = RandomHyperplanes(D,seed)
+        self._hash_functions = np.random.randint(0, D, size=(L, k))
 
     def fit(self, X: npt.NDArray[np.float64])->None:
         """
@@ -150,12 +89,11 @@ class LocalitySensitiveHashing:
         Then hash the dataset L times into the L hash tables
         """
         self._X = X
-        X_bin = self._random_hyperplanes.fit_transform(self._X)
+        X_bin = self._random_hyperplanes.fit_transform(X)
+        for i in range(self._L):
+            for j in range(len(X)):
+                self._H[i].setdefault(tuple(X_bin[j,self._hash_functions[i]]), set()).add(j)
 
-        for i in range(len(X_bin)):
-            for j in range(self._L):
-                #we have a total of L hash tables so we index with j
-                self._H[j][tuple(X_bin[i,self._hash_functions[j]])] = i
 
     def query(self, q: npt.NDArray[np.float64])->npt.NDArray[np.int64]:
         """
@@ -166,16 +104,21 @@ class LocalitySensitiveHashing:
         this would be itself), X[I[1]] the second nearest etc.
         """
         # Project the query into a binary vector
-        binary_vector = self._random_hyperplanes.transform(q)
         # Then hash it L times
         # Collect all indices from the hash buckets
-        indices = [self._H[i][tuple(binary_vector[self._hash_functions[i]])] for i in range(self._L)]
         # Then compute the dot products with those vectors
-        res = q @ self._X[indices].T
         # Finally sort results in *descending* order and return the indices
+        q_bin = self._random_hyperplanes.transform(q)
+        #collect the indices that hash to the same bucket as q_bin for all L hash tables
+        indices = [self._H[i].get(tuple(q_bin[self._hash_functions[i]])) for i in range (self._L)]
+        merged_indices = list(set().union(*indices))
+
+        #the result will be a 1 dimensional array showing the distance to all neighbors in merged_indices
+        res = q @ self._X[merged_indices].T
         sorted_indices = np.argsort(-res)
-        I = np.array(indices)[sorted_indices]
+        I = np.array(merged_indices)[sorted_indices]
         return I
+        
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -208,7 +151,7 @@ if __name__ == '__main__':
     for i in range(Q.shape[0]):
         q = Q[i,:]
         I = lsh.query(q)
-        neighbors.append([idx_to_word[i] for i in I][1:4])
+        neighbors.append([idx_to_word[i] for i in I][0:4])
     t4 = time.time()
 
     print('init took',t2-t1)

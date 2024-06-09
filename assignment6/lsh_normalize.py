@@ -31,18 +31,7 @@ def normalize(X: npt.NDArray[np.float64])->npt.NDArray[np.float64]:
     
     Implement this function using array operations! No loops allowed.
     """
-    
-    # Calculate the L2 norm of each row (axis=1)
-    norms = np.linalg.norm(X, axis=1)
-
-    # Ensure no division by zero
-    norms[norms == 0] = 1
-
-    # Divide each row by its L2 norm
-    normalized_matrix = X / norms[:,np.newaxis]
-
-    # Return Normalized Matrix
-    return normalized_matrix
+    raise NotImplementedError()
     
 
 if __name__ == '__main__':
